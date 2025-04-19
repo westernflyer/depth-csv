@@ -1,0 +1,8 @@
+# Ignore config.py so we don't accidentally commit user credentials
+config.py
+
+*~
+.idea
+*.pyc
+__pycache__
+.venv
