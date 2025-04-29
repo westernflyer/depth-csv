@@ -12,6 +12,7 @@ import logging
 import socket
 import sys
 import time
+from datetime import datetime, timezone
 from logging.handlers import SysLogHandler
 
 import parse_nmea
@@ -64,6 +65,8 @@ def nmea_loop():
     last_write = 0
     # Last known position
     last_position = None
+    # Last value for the cumulative log
+    last_log = None
 
     # Open the socket connection and start reading lines
     for line in gen_nmea(NMEA_HOST, NMEA_PORT):
@@ -86,16 +89,22 @@ def nmea_loop():
             if sentence_type == "GLL":
                 # Save the position
                 last_position = parsed_nmea
+            elif sentence_type == "VLW":
+                # Save the last distance log value
+                last_log = parsed_nmea
             elif sentence_type == 'DPT':
                 # Check whether enough time has elapsed
                 delta = parsed_nmea["timestamp"] - last_write
                 if delta >= WRITE_INTERVAL * 1000.0:
                     # Make sure the last position is fresh enough
-                    if last_position and parsed_nmea["timestamp"] - last_position["timestamp"] <= MAX_STALE * 1000.0:
+                    if (last_position
+                            and last_log
+                            and parsed_nmea["timestamp"] - last_position["timestamp"] <= MAX_STALE * 1000.0):
                         write_depth(parsed_nmea["timestamp"],
                                     last_position["latitude"],
                                     last_position["longitude"],
-                                    parsed_nmea["water_depth_meters"])
+                                    parsed_nmea.get("water_depth_meters"),
+                                    last_log.get("water_total_nm"))
                         last_write = parsed_nmea["timestamp"]
 
 
@@ -109,12 +118,19 @@ def gen_nmea(host: str, port: int):
             for line in nmea_stream:
                 yield line.strip()
 
-def write_depth(timestamp, latitude, longitude, depth):
-    lat_str = f"{latitude:10.4f}" if latitude is not None else ""
-    lon_str = f"{longitude:10.4f}" if longitude is not None else ""
-    depth_str = f"{depth:8.1f}" if depth is not None else ""
+
+def write_depth(timestamp:str, latitude:str, longitude:str, depth:str, distance:str):
+    """Write an entry to the CSV file"""
+    epoch_time = int(timestamp)  # Parse the Unix epoch time (milliseconds)
+    # Convert milliseconds to seconds and then to an ISO 8601 formatted UTC timestamp
+    time_str = datetime.fromtimestamp(int(epoch_time / 1000 + 0.5), tz=timezone.utc).isoformat()
+    lat_str = f"{latitude:.4f}" if latitude is not None else ""
+    lon_str = f"{longitude:.4f}" if longitude is not None else ""
+    depth_str = f"{depth:.1f}" if depth is not None else ""
+    distance_str = f"{distance:.1f}" if distance is not None else ""
     with open(CSV_FILE, "a") as depth_file:
-        depth_file.write(f"{timestamp:12.0f},{lat_str},{lon_str},{depth_str}\n")
+        depth_file.write(f"{timestamp:12.0f},{time_str},{lat_str},{lon_str},{depth_str},{distance_str}\n")
+
 
 def warn_print_sleep(msg: str):
     """Print and log a warning message, then sleep for NMEA_RETRY_WAIT seconds."""
